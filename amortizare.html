@@ -116,6 +116,13 @@
 
   .toast { position: fixed; bottom: calc(20px + var(--safe-bottom)); left: 50%; transform: translateX(-50%); background: #1e293b; border: 1px solid var(--border); color: var(--text); padding: 10px 20px; border-radius: 20px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 100; white-space: nowrap; }
   .toast.show { opacity: 1; }
+
+  /* Currency toggle */
+  .currency-toggle { display: flex; background: var(--surface2); border-radius: 10px; padding: 3px; gap: 3px; width: fit-content; margin-bottom: 10px; }
+  .currency-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all .2s; background: transparent; color: var(--muted); }
+  .currency-btn.active { background: var(--fidelis); color: #fff; }
+  .eur-rate-hint { font-size: 11px; color: var(--purple); margin-top: 5px; min-height: 16px; }
+
 </style>
 </head>
 <body>
@@ -146,6 +153,21 @@ let editKey=null;
 let ghToken=localStorage.getItem(GH_TOKEN_KEY)||'';
 let fileSha=null;
 let syncState='idle';
+let eurRate=null; // cached EUR/RON rate
+
+async function fetchEurRate() {
+  if(eurRate) return eurRate;
+  try {
+    const r=await fetch('https://api.exchangerate-api.com/v4/latest/EUR');
+    const j=await r.json();
+    eurRate=j.rates.RON;
+    return eurRate;
+  } catch {
+    // fallback to approximate BNR rate
+    eurRate=4.97;
+    return eurRate;
+  }
+}
 
 async function ghFetch(path, method='GET', body=null) {
   const opts={method,headers:{'Authorization':`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}};
@@ -264,7 +286,11 @@ function renderDashboard() {
   const syncTxt=syncState==='ok'?'✓ sync':syncState==='error'?'✗ sync':syncState==='loading'?'⟳ sync...':'';
   const histHTML=keys.length===0
     ?`<div class="empty"><div class="empty-icon">☀️</div>Nicio lună înregistrată.<br>Apasă butonul de mai jos!</div>`
-    :[...keys].reverse().map(k=>{const e=data[k],t=(e.solar||0)+(e.fidelis||0);return`<div class="history-item" data-edit="${k}"><div><div class="history-month">${monthLabel(k)}</div><div class="history-detail">☀️ ${fmt(e.solar||0)} &nbsp;|&nbsp; 📄 ${fmt(e.fidelis||0)}</div></div><div class="history-total">+${fmt(t)} RON</div></div>`;}).join('');
+    :[...keys].reverse().map(k=>{
+      const e=data[k],t=(e.solar||0)+(e.fidelis||0);
+      const fidelisStr=e.fidelisEur?`📄 ${fmt(e.fidelisEur)} EUR (${fmt(e.fidelis||0)} RON)`:` 📄 ${fmt(e.fidelis||0)} RON`;
+      return`<div class="history-item" data-edit="${k}"><div><div class="history-month">${monthLabel(k)}</div><div class="history-detail">☀️ ${fmt(e.solar||0)} RON &nbsp;|&nbsp;${fidelisStr}</div></div><div class="history-total">+${fmt(t)} RON</div></div>`;
+    }).join('');
 
   return `
   <div class="header"><div class="header-inner">
@@ -302,7 +328,10 @@ function renderForm() {
   const isEdit=screen==='edit'&&editKey;
   const existing=isEdit?data[editKey]:{};
   const defSolar=isEdit?(existing.solar||0):'';
-  const defFidelis=isEdit?(existing.fidelis||0):'';
+  const defFidelisRon=isEdit?(existing.fidelis||0):'';
+  const defFidelisEur=isEdit?(existing.fidelisEur||''):'';
+  const defCurrency=isEdit&&existing.fidelisEur?'EUR':'RON';
+  const defFidelisVal=defCurrency==='EUR'?defFidelisEur:defFidelisRon;
   return `
   <div class="header"><div class="header-inner">
     <button class="icon-btn" id="backBtn">←</button>
@@ -319,13 +348,20 @@ function renderForm() {
       <div class="form-hint">Solar.web → Earnings → valoarea „Month"</div>
     </div>
     <div class="form-group">
-      <label class="form-label" style="color:var(--fidelis)">📄 Dobândă Fidelis (RON)</label>
-      <input class="form-input blue" type="text" inputmode="decimal" id="fidelisInput" placeholder="ex: 1100,00" value="${defFidelis?String(defFidelis).replace('.',','):''}">
-      <div class="form-hint">Suma cupon primită în această lună</div>
+      <label class="form-label" style="color:var(--fidelis)">📄 Dobândă Fidelis</label>
+      <div class="currency-toggle">
+        <button class="currency-btn ${defCurrency==='RON'?'active':''}" id="btnRON">RON</button>
+        <button class="currency-btn ${defCurrency==='EUR'?'active':''}" id="btnEUR">EUR</button>
+      </div>
+      <input class="form-input blue" type="text" inputmode="decimal" id="fidelisInput"
+        placeholder="${defCurrency==='EUR'?'ex: 250,00':'ex: 1100,00'}"
+        value="${defFidelisVal?String(defFidelisVal).replace('.',','):''}">
+      <div class="eur-rate-hint" id="eurHint">${defCurrency==='EUR'&&defFidelisVal?'Se calculează cursul...':''}</div>
     </div>
     <div class="preview-box" id="preview" style="display:none">
       <div class="preview-label">Total luna aceasta</div>
       <div class="preview-value" id="previewVal">0,00 RON</div>
+      <div id="previewEurDetail" style="font-size:11px;color:var(--purple);margin-top:4px"></div>
     </div>
     <div class="btn-row">
       <button class="btn-cancel" id="cancelBtn">Anulează</button>
@@ -364,22 +400,63 @@ function bindEvents() {
   const fidelisIn=document.getElementById('fidelisInput');
   const preview=document.getElementById('preview');
   const previewVal=document.getElementById('previewVal');
-  function updatePreview(){
+  const eurHint=document.getElementById('eurHint');
+  const previewEurDetail=document.getElementById('previewEurDetail');
+  let currency=document.getElementById('btnEUR').classList.contains('active')?'EUR':'RON';
+
+  async function updatePreview(){
     const s=parseFloat(solarIn.value.replace(',','.'))||0;
-    const f=parseFloat(fidelisIn.value.replace(',','.'))||0;
-    preview.style.display=(s>0||f>0)?'block':'none';
-    if(previewVal) previewVal.textContent=fmt(s+f)+' RON';
+    const fRaw=parseFloat(fidelisIn.value.replace(',','.'))||0;
+    let fRon=fRaw, rate=null;
+    if(currency==='EUR'&&fRaw>0){
+      eurHint.textContent='⟳ Se preia cursul BNR...';
+      rate=await fetchEurRate();
+      fRon=fRaw*rate;
+      eurHint.textContent=`1 EUR = ${fmt(rate)} RON (curs live)`;
+      if(previewEurDetail) previewEurDetail.textContent=`${fmt(fRaw)} EUR × ${fmt(rate)} = ${fmt(fRon)} RON`;
+    } else {
+      eurHint.textContent='';
+      if(previewEurDetail) previewEurDetail.textContent='';
+    }
+    preview.style.display=(s>0||fRaw>0)?'block':'none';
+    if(previewVal) previewVal.textContent=fmt(s+fRon)+' RON';
   }
+
+  document.getElementById('btnRON').onclick=()=>{
+    currency='RON';
+    document.getElementById('btnRON').classList.add('active');
+    document.getElementById('btnEUR').classList.remove('active');
+    fidelisIn.placeholder='ex: 1100,00';
+    eurHint.textContent='';
+    updatePreview();
+  };
+  document.getElementById('btnEUR').onclick=()=>{
+    currency='EUR';
+    document.getElementById('btnEUR').classList.add('active');
+    document.getElementById('btnRON').classList.remove('active');
+    fidelisIn.placeholder='ex: 250,00';
+    updatePreview();
+  };
+
   solarIn.addEventListener('input',updatePreview);
   fidelisIn.addEventListener('input',updatePreview);
   if(screen==='edit') updatePreview();
+
   document.getElementById('saveBtn').onclick=async()=>{
     const btn=document.getElementById('saveBtn');
     btn.disabled=true; btn.textContent='Se salvează...';
     const month=document.getElementById('monthInput').value||currentKey();
     const s=parseFloat(solarIn.value.replace(',','.'))||0;
-    const f=parseFloat(fidelisIn.value.replace(',','.'))||0;
-    data[month]={solar:s,fidelis:f};
+    const fRaw=parseFloat(fidelisIn.value.replace(',','.'))||0;
+    let fRon=fRaw, entry={solar:s};
+    if(currency==='EUR'&&fRaw>0){
+      const rate=await fetchEurRate();
+      fRon=fRaw*rate;
+      entry.fidelisEur=fRaw;
+      entry.eurRate=rate;
+    }
+    entry.fidelis=fRon;
+    data[month]=entry;
     screen='dashboard'; render();
     await saveToGitHub();
   };
