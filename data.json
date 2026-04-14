@@ -6,5 +6,11 @@
   "2026-03": {
     "solar": 0,
     "fidelis": 675
+  },
+  "2026-02": {
+    "solar": 0,
+    "fidelisEur": 405,
+    "eurRate": 5.09,
+    "fidelis": 2061.45
   }
 }
