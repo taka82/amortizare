@@ -14,5 +14,9 @@
     "fidelisEur": 405,
     "eurRate": 5.09,
     "fidelis": 2061.45
+  },
+  "2026-05": {
+    "solar": 0,
+    "fidelis": 775
   }
 }
