@@ -45,7 +45,9 @@
   },
   "2026-11": {
     "solar": 400,
-    "fidelis": 608
+    "fidelisEur": 117,
+    "eurRate": 5.28,
+    "fidelis": 617.76
   },
   "2026-12": {
     "solar": 300,
